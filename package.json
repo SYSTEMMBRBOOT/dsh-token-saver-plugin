@@ -26,11 +26,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SYSTEMMBRBOOT/dsh-token-saver.git"
+    "url": "git+https://github.com/SYSTEMMBRBOOT/dsh-token-saver-plugin.git"
   },
-  "homepage": "https://github.com/SYSTEMMBRBOOT/dsh-token-saver#readme",
+  "homepage": "https://github.com/SYSTEMMBRBOOT/dsh-token-saver-plugin#readme",
   "bugs": {
-    "url": "https://github.com/SYSTEMMBRBOOT/dsh-token-saver/issues"
+    "url": "https://github.com/SYSTEMMBRBOOT/dsh-token-saver-plugin/issues"
   },
   "keywords": [
     "dsh",

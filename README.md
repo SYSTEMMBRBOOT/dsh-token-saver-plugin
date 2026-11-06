@@ -1,4 +1,4 @@
-# dsh-token-saver-plugin
+# dsh-token-saver
 
 A Host-only Harness bundle that keeps tool output from crowding out the context, and can
 drop tool schemas you never call. Both levers are deterministic: no model call, no extra
@@ -40,7 +40,7 @@ service and the `tools/post-execute` waterfall; there is no UI contribution.
 plugin_manager install_bundle target=dsh-token-saver-plugin
 
 # 2) packaged bundle from the latest release
-#    https://github.com/SYSTEMMBRBOOT/dsh-token-saver/releases/latest
+#    https://github.com/SYSTEMMBRBOOT/dsh-token-saver-plugin/releases/latest
 plugin_manager install_bundle target=<absolute path to dsh-token-saver-plugin-1.0.1.tgz>
 
 # 3) or point at a checkout / unpacked directory
