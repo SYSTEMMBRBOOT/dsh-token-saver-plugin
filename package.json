@@ -25,5 +25,21 @@
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SYSTEMMBRBOOT/dsh-token-saver.git"
+  },
+  "homepage": "https://github.com/SYSTEMMBRBOOT/dsh-token-saver#readme",
+  "bugs": {
+    "url": "https://github.com/SYSTEMMBRBOOT/dsh-token-saver/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "bundle",
+    "plugin",
+    "tokens",
+    "context"
+  ],
   "license": "MIT"
 }
