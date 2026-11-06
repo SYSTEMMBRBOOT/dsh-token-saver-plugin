@@ -1,4 +1,4 @@
-# dsh-token-saver
+# dsh-token-saver-plugin
 
 A Host-only Harness bundle that keeps tool output from crowding out the context, and can
 drop tool schemas you never call. Both levers are deterministic: no model call, no extra
