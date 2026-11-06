@@ -7,11 +7,19 @@ request, no rewriting of message history.
 ## What it does
 
 1. **Prunes oversized tool results at the source.** The plugin listens on the
-   `tools/post-execute` waterfall. When a result exceeds a token budget and consists of
-   text only, it keeps the head and tail on line boundaries, replaces the middle with a
-   marker that states how much was dropped and how to get it back, and accepts the result
-   with that content. The pruned content is what the session records, so every later
-   request carries the smaller version — the saving compounds on its own.
+   `tools/post-execute` waterfall. When a result exceeds a token budget it is replaced
+   with a smaller form before the session records it, so every later request carries the
+   smaller version and the saving compounds on its own:
+   - **JSON payloads keep their structure.** Arrays keep a prefix of their items and
+     objects keep the keys that fit; both gain a `__truncated__` field that reports what
+     was dropped. The model still gets parseable JSON instead of a cut string.
+   - **Everything else keeps head and tail** on line boundaries, with a marker that states
+     how much was dropped and how to get it back (`offset`/`limit`, a tighter pattern).
+   - **Failures stay readable.** Results flagged as errors, and plain-text results whose
+     first lines look like a failure (`Error:`, `Traceback`, `exit code: 1`, …), are left
+     intact so a broken run is still diagnosable.
+   - **Idempotent.** A result that already carries one of the plugin's markers is never
+     trimmed twice, so replayed or re-wrapped results are safe.
 2. **Hides tools you never use.** `hideTools` names tools that `ctx.tools.restrict()`
    removes from the global registry, so their JSON schemas are no longer sent with each
    request. Discovery, lookup, and execution stay aligned: a hidden tool reads as absent
@@ -65,15 +73,19 @@ out-of-range value falls back or saturates instead of throwing.
 | `minSavedChars` | `200` | Do not prune when the saving would not pay for the marker. |
 | `keepErrorResults` | `true` | Leave failed tool results untouched so failures stay diagnosable. |
 | `skipTools` | `[]` | Tool names that must never be pruned. |
+| `toolBudgets` | `{}` | Per-tool budget overrides, e.g. `{ pwsh: 1200, grep: 600 }` (200–200000 each). |
 | `hideTools` | `[]` | Tool names removed from the registry for every agent. |
-| `verbose` | `false` | Log mount state, hidden tools, and skipped results. |
+| `verbose` | `false` | Log mount state, hidden tools, skipped results, and a per-result saving line. |
 
 ```yaml
 - insert:
     - id: dsh-token-saver
-      name: dsh-token-saver
+      name: dsh-token-saver-plugin
       config:
         maxResultTokens: 2000
+        toolBudgets:
+          pwsh: 1200
+          grep: 600
         skipTools: ['read']
 ```
 
@@ -99,9 +111,13 @@ out-of-range value falls back or saturates instead of throwing.
 
 ## Limits
 
-- The token estimate is a local heuristic (wide characters ≈ 1 token, others ≈ 1 per 3.6
-  characters), used only to size the cut and report it. Trimming is approximate by design.
+- The token estimate is a local heuristic (wide characters and emoji ≈ 1 token, others ≈
+  1 per 3.6 characters), used only to size the cut and report it. Trimming is approximate
+  by design.
 - Pruning is applied per result, not per turn; a batch of many medium results each below
   the budget is left alone.
+- JSON shortening trades completeness for shape: the `__truncated__` field tells the model
+  what is missing, but a payload that only fits as a whole still has to be re-read in
+  pieces.
 - `hideTools` applies to the whole profile, including subagents, and stays in effect until
   the row's config changes.

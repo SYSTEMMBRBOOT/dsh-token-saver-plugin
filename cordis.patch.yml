@@ -10,3 +10,7 @@
         headRatio: 0.6
         # Leave error results untouched so failures stay diagnosable.
         keepErrorResults: true
+        # Optional per-tool budgets, e.g. tighten shell output below the global cap.
+        # toolBudgets:
+        #   pwsh: 1200
+        #   grep: 600

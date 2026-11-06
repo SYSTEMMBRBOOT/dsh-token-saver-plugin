@@ -150,6 +150,90 @@ cases.push(async () => {
   assert.equal(decision.value, undefined, 'value stays unset')
 })
 
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, {})
+  const rows = Array.from({ length: 300 }, (_, index) => ({
+    id: index,
+    name: `item-${index}`,
+    note: 'x'.repeat(40),
+  }))
+  const text = JSON.stringify(rows)
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'session_query' },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  assert.ok(decision.content, 'JSON array replaced')
+  const out = decision.content[0].text
+  const parsed = JSON.parse(out.slice(0, out.indexOf('\n\n[...')))
+  assert.equal(parsed.__truncated__, true, 'truncation flag present')
+  assert.equal(parsed.total, 300, 'total count reported')
+  assert.ok(parsed.items.length < 300, 'items dropped')
+  assert.equal(parsed.items[0].id, 0, 'first items kept in order')
+  assert.ok(out.length < text.length, 'JSON shorter than original')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, {})
+  const record = {}
+  for (let index = 0; index < 200; index += 1) record[`key_${index}`] = 'y'.repeat(50)
+  const text = JSON.stringify(record)
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'read' },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  const out = decision.content[0].text
+  const parsed = JSON.parse(out.slice(0, out.indexOf('\n\n[...')))
+  assert.ok(parsed.__truncated__, 'object truncation marker present')
+  assert.ok(parsed.__truncated__.omittedCount > 0, 'omitted key count reported')
+  assert.ok(Object.keys(parsed).length < 200, 'some keys kept, some dropped')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, {})
+  const text = 'Error: could not connect to host\n' + bigText(400)
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'pwsh' },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  assert.equal(decision.content, undefined, 'error-shaped text kept intact by default')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, {})
+  const text = bigText(400) + '\n\n[... 10 of 999 characters kept (~2 of ~40 tokens). ...]'
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'read' },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  assert.equal(decision.content, undefined, 'already-pruned content is not pruned twice')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, { toolBudgets: { grep: 400 } })
+  const text = bigText(100)
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'grep' },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  assert.ok(decision.content, 'per-tool budget applies below the global one')
+  assert.ok(decision.content[0].text.length < text.length * 0.6, 'tight per-tool budget enforced')
+})
+
 for (const [index, testCase] of cases.entries()) {
   await testCase()
   console.log(`ok ${index + 1}`)
