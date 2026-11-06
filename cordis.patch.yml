@@ -2,7 +2,7 @@
 # Every value below is optional; the plugin falls back to its built-in defaults.
 - insert:
     - id: dsh-token-saver
-      name: dsh-token-saver
+      name: dsh-token-saver-plugin
       config:
         # Clamp a single tool result to roughly this many tokens.
         maxResultTokens: 2000

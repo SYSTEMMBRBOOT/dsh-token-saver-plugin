@@ -28,17 +28,24 @@ The plugin is a Host-only bundle. It needs a Harness build that exposes the `too
 service and the `tools/post-execute` waterfall; there is no UI contribution.
 
 ```text
-# 1) packaged bundle from the latest release
-#    https://github.com/SYSTEMMBRBOOT/dsh-token-saver/releases/latest
-plugin_manager install_bundle target=<absolute path to dsh-token-saver-1.0.0.tgz>
+# 1) from npm (package name: dsh-token-saver-plugin)
+plugin_manager install_bundle target=dsh-token-saver-plugin
 
-# 2) or point at a checkout / unpacked directory
+# 2) packaged bundle from the latest release
+#    https://github.com/SYSTEMMBRBOOT/dsh-token-saver/releases/latest
+plugin_manager install_bundle target=<absolute path to dsh-token-saver-plugin-1.0.1.tgz>
+
+# 3) or point at a checkout / unpacked directory
 plugin_manager install_bundle target=<absolute path to dsh-token-saver>
 ```
 
-The packed `dsh-token-saver-1.0.0.tgz` ships the runtime files only (`index.js`,
-`package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `README.md`); the test suite
-stays in the repository and is not part of the installed bundle.
+The npm package is named `dsh-token-saver-plugin` because the bare name `dsh-token-saver`
+is rejected by npm as too similar to the existing `dsh-tokensaver`. The repository keeps
+the shorter name.
+
+The packed `.tgz` ships the runtime files only (`index.js`, `package.json`,
+`cordis.patch.yml`, `locale/`, `icon.svg`, `README.md`); the test suite stays in the
+repository and is not part of the installed bundle.
 
 Installing wires the package into the profile, adds it to `dsh.profile.bundles`, and
 applies `cordis.patch.yml`. To change settings afterwards, edit the inserted row's `config`
