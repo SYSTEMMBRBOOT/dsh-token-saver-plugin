@@ -1,4 +1,4 @@
-# dsh-token-saver
+﻿# dsh-token-saver-plugin
 
 A Host-only Harness bundle that keeps tool output from crowding out the context, and can
 drop tool schemas you never call. Both levers are deterministic: no model call, no extra
@@ -16,7 +16,7 @@ request, no rewriting of message history.
    - **Everything else keeps head and tail** on line boundaries, with a marker that states
      how much was dropped and how to get it back (`offset`/`limit`, a tighter pattern).
    - **Failures stay readable.** Results flagged as errors, and plain-text results whose
-     first lines look like a failure (`Error:`, `Traceback`, `exit code: 1`, …), are left
+     first lines look like a failure (`Error:`, `Traceback`, `exit code: 1`, 鈥?, are left
      intact so a broken run is still diagnosable.
    - **Idempotent.** A result that already carries one of the plugin's markers is never
      trimmed twice, so replayed or re-wrapped results are safe.
@@ -57,7 +57,7 @@ repository and is not part of the installed bundle.
 
 Installing wires the package into the profile, adds it to `dsh.profile.bundles`, and
 applies `cordis.patch.yml`. To change settings afterwards, edit the inserted row's `config`
-in the profile patch (or repack with a different default) — the defaults below apply when a
+in the profile patch (or repack with a different default) 鈥?the defaults below apply when a
 key is absent.
 
 ## Configuration
@@ -68,12 +68,12 @@ out-of-range value falls back or saturates instead of throwing.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Turn the result pruning off while keeping the rest of the plugin. |
-| `maxResultTokens` | `2000` | Budget for one tool result, in tokens (200–200000). |
-| `headRatio` | `0.6` | Share of the kept budget taken from the start; the rest comes from the end (0.1–0.9). |
+| `maxResultTokens` | `2000` | Budget for one tool result, in tokens (200鈥?00000). |
+| `headRatio` | `0.6` | Share of the kept budget taken from the start; the rest comes from the end (0.1鈥?.9). |
 | `minSavedChars` | `200` | Do not prune when the saving would not pay for the marker. |
 | `keepErrorResults` | `true` | Leave failed tool results untouched so failures stay diagnosable. |
 | `skipTools` | `[]` | Tool names that must never be pruned. |
-| `toolBudgets` | `{}` | Per-tool budget overrides, e.g. `{ pwsh: 1200, grep: 600 }` (200–200000 each). |
+| `toolBudgets` | `{}` | Per-tool budget overrides, e.g. `{ pwsh: 1200, grep: 600 }` (200鈥?00000 each). |
 | `hideTools` | `[]` | Tool names removed from the registry for every agent. |
 | `verbose` | `false` | Log mount state, hidden tools, skipped results, and a per-result saving line. |
 
@@ -106,13 +106,12 @@ out-of-range value falls back or saturates instead of throwing.
    the card should show the shortened text.
 3. Omit the marker by setting `maxResultTokens` far above the output size; the result must
    come back unchanged, which shows the listener only acts above the budget.
-4. Ask the agent to re-read the same region with `offset`/`limit` — the suggested recovery
+4. Ask the agent to re-read the same region with `offset`/`limit` 鈥?the suggested recovery
    path must work, because `read` itself is untouched.
 
 ## Limits
 
-- The token estimate is a local heuristic (wide characters and emoji ≈ 1 token, others ≈
-  1 per 3.6 characters), used only to size the cut and report it. Trimming is approximate
+- The token estimate is a local heuristic (wide characters and emoji 鈮?1 token, others 鈮?  1 per 3.6 characters), used only to size the cut and report it. Trimming is approximate
   by design.
 - Pruning is applied per result, not per turn; a batch of many medium results each below
   the budget is left alone.
