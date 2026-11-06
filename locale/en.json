@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Token saver",
+    "description": "Shrinks oversized tool results before they enter the conversation and can hide tools you never use, cutting the tokens every request carries."
+  }
+}

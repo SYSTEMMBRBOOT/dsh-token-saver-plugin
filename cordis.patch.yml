@@ -1,0 +1,12 @@
+# Token saver: trim oversized tool results and hide unused tools.
+# Every value below is optional; the plugin falls back to its built-in defaults.
+- insert:
+    - id: dsh-token-saver
+      name: dsh-token-saver
+      config:
+        # Clamp a single tool result to roughly this many tokens.
+        maxResultTokens: 2000
+        # Share of the remaining budget kept from the start of the output.
+        headRatio: 0.6
+        # Leave error results untouched so failures stay diagnosable.
+        keepErrorResults: true

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Token saver">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#1e3a8a"/>
+  <rect x="12" y="17" width="28" height="5" rx="2.5" fill="#dbeafe"/>
+  <rect x="12" y="29" width="20" height="5" rx="2.5" fill="#bdd7fd"/>
+  <rect x="12" y="41" width="12" height="5" rx="2.5" fill="#93bdf7"/>
+  <path d="M49 19v17" fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"/>
+  <path d="M43 31l6 7 6-7" fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
