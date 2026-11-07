@@ -1,7 +1,7 @@
 /**
  * dsh-token-saver
  *
- * Two deterministic levers, both opt-in through the row's `config`:
+ * Deterministic levers, all opt-in through the row's `config`:
  *
  * 1. `tools/post-execute` pruning — a tool result that exceeds a token budget is
  *    replaced, before it is committed to the session log, with a smaller form:
@@ -12,15 +12,30 @@
  *    rewrites its model-visible content. The saving compounds, because every later
  *    request replays the pruned content instead of the original.
  *
- * 2. `hideTools` — removes named tools from the global registry for every agent
- *    through `ctx.tools.restrict()`, so their JSON schemas stop being sent on
- *    every request. Discovery, lookup, and execution stay aligned: a hidden tool
- *    reads as absent everywhere, and unknown names are ignored instead of failing.
+ * 2. `presets` / `hideTools` — removes whole tool families (or exact names, with
+ *    `*` wildcards) from the global registry for every agent through
+ *    `ctx.tools.restrict()`, so their JSON schemas stop being sent on every
+ *    request. Discovery, lookup, and execution stay aligned: a hidden tool reads as
+ *    absent everywhere, and unknown names are ignored instead of failing.
+ *
+ * 3. `adaptive` — when a session is close to its context window, the result budget
+ *    is tightened; when it is nearly empty, the budget is relaxed. The pressure
+ *    reading comes from `ctx.tokenMeter.contextPressure()`; when that service is
+ *    unavailable the factor stays at 1.
+ *
+ * 4. `dropImagesAboveKB` — optionally replaces an oversized inline image block with
+ *    a one-line placeholder, the one result shape pruning otherwise skips.
  *
  * Nothing here touches the system prompt, other plugins' contributions, or the
  * message history; billion-context (ACP) folds long conversations at the gateway,
  * and this plugin keeps that fold smaller by producing smaller results in the
  * first place.
+ *
+ * Note on native deferred loading: `ToolSchema.deferLoading` exists, but the
+ * harness only forwards it to the Anthropic provider as `defer_loading`, which
+ * depends on that vendor's tool-search/tool_reference round trip. Providers
+ * without that feature (including DeepSeek) cannot use it, which is why tool-family
+ * hiding is the lever offered here instead.
  */
 
 export const inject = ['tools']
@@ -33,15 +48,34 @@ const DEFAULTS = {
   keepErrorResults: true,
   skipTools: [],
   hideTools: [],
+  presets: [],
   toolBudgets: {},
+  adaptive: { enabled: true, highPressure: 0.7, lowPressure: 0.3, highFactor: 0.5, lowFactor: 1.5 },
+  dropImagesAboveKB: 0,
   verbose: false,
+}
+
+/** Named tool families. Every entry is a wildcard pattern list. */
+const PRESETS = {
+  browser: ['ego_*'],
+  office: ['office_*'],
+  schedules: ['schedule_*'],
+  agents: [
+    'subagent',
+    'subagent_fork',
+    'send_message',
+    'interrupt_agent',
+    'list_agents',
+    'list_subagent_models',
+    'workflow',
+  ],
 }
 
 const MARKER_FLOOR_CHARS = 180
 const PRUNE_MARKERS = ['characters were omitted from the middle to save context', 'characters kept (~', '"__truncated__"']
 
 /** Running totals for the current process, reported only through `verbose` logs. */
-const stats = { pruned: 0, originalChars: 0, keptChars: 0, originalTokens: 0, keptTokens: 0 }
+const stats = { pruned: 0, originalChars: 0, keptChars: 0, originalTokens: 0, keptTokens: 0, images: 0 }
 
 function clampNumber(value, fallback, min, max) {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -66,8 +100,34 @@ function budgetMap(value) {
   return result
 }
 
+function normalizeAdaptive(value) {
+  const raw = value && typeof value === 'object' ? value : {}
+  return {
+    enabled: raw.enabled !== false,
+    highPressure: clampNumber(raw.highPressure, DEFAULTS.adaptive.highPressure, 0.1, 1),
+    lowPressure: clampNumber(raw.lowPressure, DEFAULTS.adaptive.lowPressure, 0, 0.99),
+    highFactor: clampNumber(raw.highFactor, DEFAULTS.adaptive.highFactor, 0.1, 1),
+    lowFactor: clampNumber(raw.lowFactor, DEFAULTS.adaptive.lowFactor, 1, 4),
+  }
+}
+
+/** Preset names expand to patterns; unknown preset names are reported, not fatal. */
+function expandPresets(names) {
+  const patterns = []
+  const unknown = []
+  for (const name of names) {
+    const preset = PRESETS[name]
+    if (preset === undefined) unknown.push(name)
+    else patterns.push(...preset)
+  }
+  return { patterns, unknown }
+}
+
 function normalizeConfig(raw) {
   const config = raw && typeof raw === 'object' ? raw : {}
+  const adaptive = normalizeAdaptive(config.adaptive)
+  // Keep the documented ordering sane: tighten before relaxing.
+  if (adaptive.lowPressure > adaptive.highPressure) adaptive.lowPressure = adaptive.highPressure
   return {
     enabled: config.enabled !== false,
     maxResultTokens: Math.floor(clampNumber(config.maxResultTokens, DEFAULTS.maxResultTokens, 200, 200000)),
@@ -76,7 +136,10 @@ function normalizeConfig(raw) {
     keepErrorResults: config.keepErrorResults !== false,
     skipTools: stringList(config.skipTools),
     hideTools: stringList(config.hideTools),
+    presets: stringList(config.presets),
     toolBudgets: budgetMap(config.toolBudgets),
+    adaptive,
+    dropImagesAboveKB: Math.floor(clampNumber(config.dropImagesAboveKB, DEFAULTS.dropImagesAboveKB, 0, 102400)),
     verbose: config.verbose === true,
   }
 }
@@ -217,13 +280,89 @@ function pruneJson(text, budgetTokens) {
   return undefined
 }
 
+/** Rough byte size of an inline image block, or 0 when the shape is unknown. */
+function imageBytes(block) {
+  const base64 =
+    typeof block.data === 'string' ? block.data : typeof block.source?.data === 'string' ? block.source.data : undefined
+  if (base64 === undefined) return 0
+  return Math.floor((base64.length * 3) / 4)
+}
+
+/**
+ * Replace images above `dropImagesAboveKB` with a placeholder. A single screenshot
+ * can cost thousands of tokens, and pruning skips any content that carries a
+ * non-text block, so this is the only way to bound image-heavy results.
+ */
+function dropOversizedImages(content, settings) {
+  if (!(settings.dropImagesAboveKB > 0) || !Array.isArray(content)) return undefined
+  let changed = false
+  let keptTokens = 0
+  let originalTokens = 0
+  const next = content.map((block) => {
+    if (!block || block.type !== 'image') return block
+    const bytes = imageBytes(block)
+    if (bytes <= settings.dropImagesAboveKB * 1024) return block
+    changed = true
+    const kb = Math.round(bytes / 1024)
+    const placeholder = {
+      type: 'text',
+      text:
+        `[image omitted to save context: ~${kb} KB, above dropImagesAboveKB=${settings.dropImagesAboveKB}. ` +
+        'Raise the limit (or set it to 0) to keep images.]',
+    }
+    // Base64 text costs roughly one token per four characters, i.e. three per byte.
+    originalTokens += Math.round(bytes / 3)
+    keptTokens += estimateTokens(placeholder.text)
+    return placeholder
+  })
+  return changed ? { content: next, originalTokens: Math.round(originalTokens), keptTokens } : undefined
+}
+
+/** `*` wildcards let one pattern cover a family without listing every name. */
+function matchesPattern(name, pattern) {
+  if (!pattern.includes('*')) return name === pattern
+  const source = pattern
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*')
+  return new RegExp(`^${source}$`).test(name)
+}
+
+/**
+ * Ratio of the session's context window that is currently in use, or undefined
+ * when the meter service is missing or the session handle is not reachable.
+ */
+function pressureRatio(ctx, exec) {
+  try {
+    const session = exec?.session ?? exec?.agent?.session
+    if (session === undefined) return undefined
+    const reading = ctx.tokenMeter?.contextPressure?.(session)
+    const used = reading?.pressureTokens
+    const window = reading?.contextWindow
+    if (!Number.isFinite(used) || !Number.isFinite(window) || window <= 0) return undefined
+    return used / window
+  } catch {
+    return undefined
+  }
+}
+
+/** Budget multiplier for this result, derived from context pressure. */
+function adaptiveFactor(ctx, exec, settings) {
+  const adaptive = settings.adaptive
+  if (!adaptive.enabled) return 1
+  const ratio = pressureRatio(ctx, exec)
+  if (ratio === undefined) return 1
+  if (ratio >= adaptive.highPressure) return adaptive.highFactor
+  if (ratio <= adaptive.lowPressure) return adaptive.lowFactor
+  return 1
+}
+
 /**
  * Returns a plan for the replacement content, or undefined when the result should
- * pass through. Conservative on purpose: image/file blocks, unknown shapes, error
- * results, and results whose saving would be swallowed by the marker all stay
- * untouched.
+ * pass through. Conservative on purpose: unknown shapes, error results, and results
+ * whose saving would be swallowed by the marker all stay untouched.
  */
-function planPrune(content, exec, result, settings) {
+function planPrune(content, exec, result, settings, factor) {
   if (result.isError && settings.keepErrorResults) return undefined
   if (settings.skipTools.includes(exec.name)) return undefined
 
@@ -232,7 +371,8 @@ function planPrune(content, exec, result, settings) {
   if (alreadyPruned(text)) return undefined
   if (settings.keepErrorResults && looksLikeError(text)) return undefined
 
-  const budgetTokens = settings.toolBudgets[exec.name] ?? settings.maxResultTokens
+  const base = settings.toolBudgets[exec.name] ?? settings.maxResultTokens
+  const budgetTokens = Math.max(200, Math.round(base * factor))
   const totalTokens = estimateTokens(text)
   if (totalTokens <= budgetTokens) return undefined
 
@@ -252,6 +392,7 @@ function planPrune(content, exec, result, settings) {
       keptChars: structured.length,
       originalTokens: totalTokens,
       keptTokens: estimateTokens(structured),
+      budgetTokens,
     }
   }
 
@@ -277,6 +418,7 @@ function planPrune(content, exec, result, settings) {
     keptChars,
     originalTokens: totalTokens,
     keptTokens,
+    budgetTokens,
   }
 }
 
@@ -292,22 +434,42 @@ export function apply(ctx, rawConfig) {
         // A decision that carries a replacement `value` already re-rendered the
         // result; leave it alone rather than mixing two projections.
         if (decision.value !== undefined) return decision
-        const plan = planPrune(decision.content ?? result.content, exec, result, settings)
-        if (plan === undefined) return decision
 
-        stats.pruned += 1
-        stats.originalChars += plan.originalChars
-        stats.keptChars += plan.keptChars
-        stats.originalTokens += plan.originalTokens
-        stats.keptTokens += plan.keptTokens
+        const original = decision.content ?? result.content
+        const images = dropOversizedImages(original, settings)
+        const working = images ? images.content : original
+        const factor = adaptiveFactor(ctx, exec, settings)
+        const plan = planPrune(working, exec, result, settings, factor)
+
+        if (plan === undefined && images === undefined) return decision
+
+        if (images !== undefined) {
+          stats.images += 1
+          stats.originalTokens += images.originalTokens
+          stats.keptTokens += images.keptTokens
+        }
+        if (plan !== undefined) {
+          stats.pruned += 1
+          stats.originalChars += plan.originalChars
+          stats.keptChars += plan.keptChars
+          stats.originalTokens += plan.originalTokens
+          stats.keptTokens += plan.keptTokens
+        }
         if (settings.verbose) {
+          const parts = []
+          if (plan !== undefined) {
+            parts.push(
+              `${plan.originalChars}->${plan.keptChars} chars (~${plan.originalTokens}->~${plan.keptTokens} tokens, budget ${plan.budgetTokens})`,
+            )
+          }
+          if (images !== undefined) parts.push(`dropped ${images.content.length ? 'oversized image(s)' : 'image'}`)
           logger?.info?.(
-            `[token-saver] ${exec.name}: ${plan.originalChars}->${plan.keptChars} chars ` +
-              `(~${plan.originalTokens}->~${plan.keptTokens} tokens); ` +
-              `lifetime: ${stats.pruned} results, ~${stats.originalTokens - stats.keptTokens} tokens dropped`,
+            `[token-saver] ${exec.name}: ${parts.join('; ')}; ` +
+              `lifetime: ${stats.pruned} results, ${stats.images} image drops, ` +
+              `~${stats.originalTokens - stats.keptTokens} tokens dropped`,
           )
         }
-        return { ...decision, content: plan.content }
+        return { ...decision, content: plan !== undefined ? plan.content : working }
       } catch (error) {
         if (settings.verbose) logger?.warn?.('[token-saver] left a result unpruned:', error)
         return decision
@@ -315,29 +477,43 @@ export function apply(ctx, rawConfig) {
     })
   }
 
-  if (settings.hideTools.length > 0) {
-    let known
-    try {
-      known = new Set(ctx.tools.definitions().map((definition) => definition.name))
-    } catch (error) {
-      if (settings.verbose) logger?.warn?.('[token-saver] could not read the tool registry:', error)
-      known = new Set()
-    }
-    const deny = settings.hideTools.filter((name) => known.has(name))
-    const unknown = settings.hideTools.filter((name) => !known.has(name))
-    if (unknown.length > 0 && settings.verbose) {
-      logger?.warn?.(`[token-saver] hideTools ignored unknown tools: ${unknown.join(', ')}`)
-    }
-    if (deny.length > 0) {
-      ctx.effect(() => ctx.tools.restrict({ deny }))
-      logger?.info?.(`[token-saver] hidden tools: ${deny.join(', ')}`)
-    }
+  const deny = resolveDenyList(ctx, settings, logger)
+  if (deny.length > 0) {
+    ctx.effect(() => ctx.tools.restrict({ deny }))
+    logger?.info?.(`[token-saver] hidden tools: ${deny.join(', ')}`)
   }
 
   if (settings.verbose) {
     logger?.info?.(
       `[token-saver] ready: maxResultTokens=${settings.maxResultTokens} headRatio=${settings.headRatio} ` +
-        `toolBudgets=${Object.keys(settings.toolBudgets).length}`,
+        `toolBudgets=${Object.keys(settings.toolBudgets).length} presets=${settings.presets.join(',') || 'none'} ` +
+        `adaptive=${settings.adaptive.enabled ? 'on' : 'off'} dropImagesAboveKB=${settings.dropImagesAboveKB}`,
     )
   }
+}
+
+/** Exact names plus preset/wildcard matches, filtered to tools that really exist. */
+function resolveDenyList(ctx, settings, logger) {
+  const { patterns, unknown } = expandPresets(settings.presets)
+  if (unknown.length > 0) {
+    logger?.warn?.(`[token-saver] unknown presets ignored: ${unknown.join(', ')}`)
+  }
+  const rules = [...settings.hideTools, ...patterns]
+  if (rules.length === 0) return []
+
+  let known
+  try {
+    known = new Set(ctx.tools.definitions().map((definition) => definition.name))
+  } catch (error) {
+    if (settings.verbose) logger?.warn?.('[token-saver] could not read the tool registry:', error)
+    return []
+  }
+
+  const deny = [...known].filter((name) => rules.some((rule) => matchesPattern(name, rule)))
+  if (settings.verbose) {
+    const matched = new Set(deny)
+    const stale = rules.filter((rule) => !rule.includes('*') && !matched.has(rule))
+    if (stale.length > 0) logger?.warn?.(`[token-saver] hideTools matched no tool: ${stale.join(', ')}`)
+  }
+  return deny
 }

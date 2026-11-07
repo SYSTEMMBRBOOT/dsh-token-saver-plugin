@@ -1,4 +1,5 @@
-# Token saver: trim oversized tool results and hide unused tools.
+# Token saver: trim oversized tool results, hide unused tool families, tighten
+# the budget as the context fills up.
 # Every value below is optional; the plugin falls back to its built-in defaults.
 - insert:
     - id: dsh-token-saver
@@ -14,3 +15,19 @@
         # toolBudgets:
         #   pwsh: 1200
         #   grep: 600
+        # Hide whole tool families so their JSON schemas stop riding along on every
+        # request: browser (ego_*), office (office_*), schedules (schedule_*),
+        # agents (subagent and friends). Exact names and `*` wildcards also work.
+        # presets: []
+        # hideTools: ['office_*']
+        # Shrink the budget when the session is close to its context window and
+        # relax it when the window is nearly empty.
+        # adaptive:
+        #   enabled: true
+        #   highPressure: 0.7
+        #   lowPressure: 0.3
+        #   highFactor: 0.5
+        #   lowFactor: 1.5
+        # Replace inline images larger than this many KB with a text placeholder
+        # (0 keeps every image).
+        # dropImagesAboveKB: 0

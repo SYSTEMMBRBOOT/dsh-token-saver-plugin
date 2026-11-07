@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { apply } from '../index.js'
 
-function fakeContext(toolNames = []) {
+function fakeContext(toolNames = [], pressure) {
   const listeners = new Map()
   const restrictCalls = []
   const ctx = {
@@ -28,6 +28,7 @@ function fakeContext(toolNames = []) {
         return () => {}
       },
     },
+    tokenMeter: pressure === undefined ? undefined : { contextPressure: () => pressure },
   }
   return { ctx, listeners, restrictCalls }
 }
@@ -232,6 +233,100 @@ cases.push(async () => {
   )
   assert.ok(decision.content, 'per-tool budget applies below the global one')
   assert.ok(decision.content[0].text.length < text.length * 0.6, 'tight per-tool budget enforced')
+})
+
+cases.push(async () => {
+  const { ctx, restrictCalls } = fakeContext(['ego_click', 'ego_fill', 'read', 'office_xlsx'])
+  apply(ctx, { presets: ['browser'] })
+  assert.deepEqual(restrictCalls, [{ deny: ['ego_click', 'ego_fill'] }], 'preset hides only its family')
+})
+
+cases.push(async () => {
+  const { ctx, restrictCalls } = fakeContext(['ego_click', 'office_xlsx', 'read'])
+  apply(ctx, { hideTools: ['ego_*'], presets: ['office'] })
+  assert.deepEqual(restrictCalls, [{ deny: ['ego_click', 'office_xlsx'] }], 'wildcards and presets combine')
+})
+
+cases.push(async () => {
+  const { ctx, restrictCalls } = fakeContext(['read'])
+  apply(ctx, { presets: ['does-not-exist'] })
+  assert.equal(restrictCalls.length, 0, 'unknown preset is ignored, not fatal')
+})
+
+cases.push(async () => {
+  const { ctx: tightCtx, listeners: tightListeners } = fakeContext(undefined, {
+    pressureTokens: 920,
+    contextWindow: 1000,
+  })
+  apply(tightCtx, { maxResultTokens: 2000 })
+  const text = bigText(400)
+  const tight = await runPostExecute(
+    tightCtx,
+    tightListeners,
+    { name: 'read', session: {} },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+
+  const { ctx: idleCtx, listeners: idleListeners } = fakeContext()
+  apply(idleCtx, { maxResultTokens: 2000 })
+  const idle = await runPostExecute(
+    idleCtx,
+    idleListeners,
+    { name: 'read', session: {} },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+
+  assert.ok(tight.content[0].text.length < idle.content[0].text.length, 'high pressure tightens the budget')
+  assert.ok(idle.content[0].text.length < text.length, 'idle session still prunes')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext(undefined, { pressureTokens: 500, contextWindow: 1000 })
+  apply(ctx, { maxResultTokens: 2000 })
+  const text = bigText(400)
+  const middle = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'read', session: {} },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  const { ctx: plainCtx, listeners: plainListeners } = fakeContext()
+  apply(plainCtx, { maxResultTokens: 2000 })
+  const plain = await runPostExecute(
+    plainCtx,
+    plainListeners,
+    { name: 'read', session: {} },
+    { isError: false, content: [{ type: 'text', text }] },
+  )
+  assert.equal(middle.content[0].text.length, plain.content[0].text.length, 'middle pressure keeps the base budget')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, { dropImagesAboveKB: 64 })
+  const data = 'A'.repeat(200 * 1024)
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'ego_screenshot' },
+    { isError: false, content: [{ type: 'image', data }] },
+  )
+  assert.ok(decision.content, 'oversized image replaced')
+  assert.equal(decision.content[0].type, 'text', 'placeholder is text')
+  assert.match(decision.content[0].text, /image omitted to save context/, 'placeholder explains itself')
+})
+
+cases.push(async () => {
+  const { ctx, listeners } = fakeContext()
+  apply(ctx, { dropImagesAboveKB: 64 })
+  const data = 'A'.repeat(8 * 1024)
+  const decision = await runPostExecute(
+    ctx,
+    listeners,
+    { name: 'ego_screenshot' },
+    { isError: false, content: [{ type: 'image', data }] },
+  )
+  assert.equal(decision.content, undefined, 'small image untouched')
 })
 
 for (const [index, testCase] of cases.entries()) {

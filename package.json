@@ -1,7 +1,7 @@
 {
   "name": "dsh-token-saver-plugin",
-  "version": "1.0.2",
-  "description": "Deterministic token reduction: clamps oversized tool results before they enter the conversation, and optionally hides unused tools.",
+  "version": "1.1.0",
+  "description": "Deterministic token reduction: clamps oversized tool results, hides unused tool families, and adapts the budget to context pressure.",
   "type": "module",
   "main": "index.js",
   "exports": {
